@@ -156,12 +156,16 @@ class Model:
         return result
         
     #--------------------------------------------------------------------------
-    def compare_against_baseline(self, by_terms=False):
+    def compare_against_baseline(self, by_terms=False, use_probabilities=True):
         if self.value is None:
             print(None)
         else:
             full_stats = self.create_full_stats()
-            value = self.compute_value(full_stats, self.y_prob)
+            if use_probabilities:
+                value = self.compute_value(full_stats, self.y_prob)
+            else:
+                y_hat = self.model.predict(self.X)
+                value = self.compute_value(full_stats, y_hat)
 
             print('Baseline (actual enrollment) vs. Current value (expected enrollment)')
             self._against_baseline(value, self.baseline)
@@ -199,7 +203,9 @@ class Model:
         print('ROI:                 {}%'.format(round(value.roi - baseline.roi,2)))
         print('Affordability:       {}%'.format(
             round(100*(value.affordability/baseline.affordability - 1), 1)))
-        print('Affordable:          ${}'.format(round(value.affordable - baseline.affordable,1)))
+        # print('Affordable:          ${}'.format(round(value.affordable - baseline.affordable,1)))
+        # 5/30/2022
+        print('Unmet need:          ${}'.format(round(value.affordable - baseline.affordable,1)))
         print('Accessibility:       {}%'.format(
             round(100*(value.accessible/baseline.accessible - 1), 1)))
 

@@ -10,8 +10,8 @@ import os, datetime
 from .largest_k import LargestK
 import datetime
 
-class Optimizer:
-    def __init__(self, s0, model, opt_attributes, opt_weights, k_best, max_investment=None, output_file='optimizer_results.csv'):
+class NPLocalSearch:
+    def __init__(self, s0, model, opt_attributes, opt_weights, k_best, output_file='optimizer_results.csv'):
         self.s0 = s0
         self.solution = s0.copy()
         self.model = model
@@ -25,7 +25,6 @@ class Optimizer:
         self.best_solution = None
         self.best_score = None
         self.runtime = 0
-        self.max_investment = max_investment
         self.output_file = output_file
 
     #--------------------------------------------------------------------------
@@ -49,14 +48,17 @@ class Optimizer:
         return 'none'
 
     #--------------------------------------------------------------------------
-    def stochastic_hill_climbing(self, m_amounts=[], n_amounts=[], add_prob=0.5, merit_prob=0.5, iterations=50):
+    def stochastic_hill_climbing(self, m_amounts=[], n_amounts=[], add_prob=0.5, merit_prob=0.5, iterations=50,
+        max_investment = None):
         starting_time = datetime.datetime.now()
         
         self.best_solutions = LargestK(self.k_best)
         self.shc_worst_value = None
         self.shc_best_value = None
         self.hc_iterations = iterations
-        
+        forward_moves = 0
+        no_progress, no_progress_steps = False, 0
+
         for i in range(iterations):
             wto = self.determine_which_to_optimize(m_amounts, n_amounts, merit_prob)
             if wto == 'merit':
@@ -89,12 +91,15 @@ class Optimizer:
                     self.shc_best_value = score
                     
                 constraints_satisfied = False
-                if self.max_investment is None or self.model.value.amount_mn <= self.max_investment:
+                if max_investment is None or self.model.value.amount_mn <= max_investment:
                     constraints_satisfied = True 
 
                 if score > previous_score and constraints_satisfied:
+                    forward_moves += 1
+                    no_progress, no_progress_steps = False, 0
                     print('\ti={}, {}, {} {}, score increased to {}.'.format(i,wto,op,amount,round(score,6)))
                 else:
+                    no_progress, no_progress_steps = True, no_progress_steps+1
                     buckets.undo(op, amount, idx)
                     self.model.value = self.model.saved_value.copy()
                     #
@@ -119,7 +124,7 @@ class Optimizer:
         self.best_score, self.best_solution = self.best_solutions.largest()
         if self.best_solution is not None:
             self.model.apply_need_merit_buckets(self.best_solution)
-            self.shc_best_solution = self.best_solution.copy()
+        self.shc_best_solution = self.best_solution.copy()
         self.archive('stochastic hill climbing',
             m_amounts=m_amounts,
             n_amounts=n_amounts,
@@ -127,9 +132,10 @@ class Optimizer:
             merit_prob=merit_prob,
             iterations=iterations,
         )
-        print(self.best_solution)
+        # print(self.best_solution)
         self.runtime = datetime.datetime.now() - starting_time
         self.append_results('stochastic_hc')
+        return forward_moves / iterations, no_progress_steps / iterations
 
     #--------------------------------------------------------------------------
     def simulated_quenching(self, 
@@ -140,12 +146,13 @@ class Optimizer:
                             temperature_duration=20,
                             temperature_decrement=0.95,
                             annealing_iterations=50,
-                            start_from_s0=False):
+                            start_from_s0=False,
+                            max_investment=None):
         starting_time = datetime.datetime.now()
         print('Optimizing for {} with weights {}'.format(self.opt_attributes, self.opt_weights))
         print(self.solution)
         print('Stochastic hill climb')
-        self.stochastic_hill_climbing(m_amounts, n_amounts, iterations=100)
+        self.stochastic_hill_climbing(m_amounts, n_amounts, iterations=annealing_iterations)
         print()
         print()
         print('Simulated quenching')
@@ -185,7 +192,7 @@ class Optimizer:
                     score = self.score()
 
                     constraints_satisfied = False
-                    if self.max_investment is None or self.model.value.amount_mn <= self.max_investment:
+                    if max_investment is None or self.model.value.amount_mn <= max_investment:
                         constraints_satisfied = True 
 
                     if score > previous_score and constraints_satisfied:
@@ -240,101 +247,13 @@ class Optimizer:
 
 
     #--------------------------------------------------------------------------
-    def simulated_annealing(self, 
-                            m_amounts=[], 
-                            n_amounts=[], 
-                            add_prob=0.5, 
-                            merit_prob=0.5, 
-                            temperature_duration=20,
-                            temperature_decrement=0.01,
-                            annealing_iterations=50):
-        starting_time = datetime.datetime.now()
-        print(self.solution)
-        T0 = -0.0001 / numpy.log(0.5)
-        d = temperature_decrement * T0
-        self.best_solutions = LargestK(self.k_best)
-        self.sa_iterations = annealing_iterations
-        self.temp_duration = temp_duration
-        for j in range(annealing_iterations):
-            T = T0 - j*d
-            print('j = {}, T = {}'.format(j,T))
-            for i in range(temperature_duration):
-                wto = self.determine_which_to_optimize(m_amounts, n_amounts, merit_prob)
-                if wto == 'merit':
-                    buckets = self.solution.merit_buckets
-                    apply_buckets = self.model.apply_merit_buckets
-                    amounts = m_amounts
-                elif wto == 'need':
-                    buckets = self.solution.need_buckets
-                    apply_buckets = self.model.apply_need_buckets
-                    amounts = n_amounts
-                else:
-                    break
-
-                r = numpy.random.rand()
-                if r <= add_prob:
-                    amount, idx = buckets.random_add(amounts)
-                    op = 'add'
-                else:
-                    amount, idx = buckets.random_remove(amounts)
-                    op = 'remove'
-                if idx>=0:
-                    self.model.save_value()
-                    apply_buckets(self.solution)
-                    previous_score = self.previous_score()
-                    score = self.score()
-
-                    constraints_satisfied = False
-                    if self.max_investment is None or self.model.value.amount_mn <= self.max_investment:
-                        constraints_satisfied = True 
-
-                    if score > previous_score and constraints_satisfied:
-                        print('\ti={}, {}, {} {}, score increased to {}.'.format(
-                            i,wto,op,amount,round(score,6)))
-                    else:
-                        transition_prob = numpy.e**(-0.0001/T)
-                        # transition_prob = numpy.e**((score-previous_score)/T)
-                        if numpy.random.rand() <= transition_prob and constraints_satisfied:
-                            print('\ti={}, {}, {} {}, backward move with score decreased to {}.'.format(
-                                i,wto,op,amount,round(score,6)))
-                        else:
-                            buckets.undo(op, amount, idx)
-                            self.model.value = self.model.saved_value.copy()
-
-                    if constraints_satisfied:
-                        self.best_solutions.add(score, self.solution, copy=True)
-                else:
-                    if wto == 'merit':
-                        # m_amounts=[]
-                        print('\tUnable to make improvement on merit buckets at iteration {}'.format(i))
-                    elif wto == 'need':
-                        # n_amounts = []
-                        print('\tUnable to make improvement on need buckets at iteration {}'.format(i))
-                    else:
-                        print('\tUnable to make improvement on iteration {}'.format(i))
-                        continue
-
-        self.best_score, self.best_solution = self.best_solutions.largest()
-        if self.best_solution is not None:
-            self.model.apply_need_merit_buckets(self.best_solution)
-        self.archive('simulated annealing',
-            m_amounts=m_amounts,
-            n_amounts=n_amounts,
-            add_prob=add_prob,
-            merit_prob=merit_prob,
-            temperature_duration=temperature_duration,
-            temperature_decrement=temperature_decrement,
-            annealing_iterations=annealing_iterations,
-        )
-        self.runtime = datetime.datetime.now() - starting_time
-        self.append_results('simulated_annealing')
-
-
-    #--------------------------------------------------------------------------
     def _score(self, value):
         v = value[self.opt_attributes]
         if 'amount_mn' in v:
             v.amount_mn = 1.0 / v.amount_mn
+        #
+        # this could be better:  (v-self.normalizer) /  abs(self.normalizer)
+        #
         return (v/self.normalizer).dot(self.opt_weights)
 
 
@@ -376,7 +295,6 @@ class Optimizer:
             optimizer = [optimizer],
             opt_weights = [self.opt_weights],
             opt_attributes = [self.opt_attributes],
-            max_investment = [self.max_investment],
             iterations = [iterations],
             amount_merit = [100*(best_value.amount_merit/baseline.amount_merit - 1)],
             amount_merit_diff = [best_value.amount_merit-baseline.amount_merit],

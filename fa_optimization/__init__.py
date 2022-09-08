@@ -5,3 +5,4 @@
 from .solution import Solution
 from .model import Model
 from .optimizer import Optimizer
+from .np_localsearch import NPLocalSearch
